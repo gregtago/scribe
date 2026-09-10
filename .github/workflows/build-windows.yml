@@ -38,6 +38,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Tests de non-régression (ressources)
+        run: |
+          # Vérifie notamment qu'un PDF dont seule la date de modification a
+          # changé (synchronisation OneDrive) ne repart pas à l'OCR, et que le
+          # parallélisme reste borné. Moteur OCR simulé : quelques secondes.
+          python tests/test_ressources.py
+
       - name: Compiler le service (PyInstaller)
         run: pyinstaller --noconfirm --workpath dist/_pyiwork build/scribe.spec
 
