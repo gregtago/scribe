@@ -23,11 +23,24 @@ faire.
   erreur sont maintenant distingués.
 - **Ré-analyse d'un PDF que Scribe vient lui-même de réécrire** : l'écriture
   du résultat déclenchait un nouveau tour de file pour rien.
-- **Journaux du service sans aucune limite de taille.** `service-out.log` et
-  `service-err.log`, où le gestionnaire de service (NSSM) recopie tout ce
-  qu'écrit le processus — messages de Tesseract et de Ghostscript compris —
-  grossissaient sans plafond ; des journaux de plusieurs dizaines de Mo ont été
-  observés. L'installeur leur applique désormais une rotation à 2 Mo, à chaud.
+- **Les messages d'OCRmyPDF fuyaient sur la sortie d'erreur, sans plafond.**
+  OCRmyPDF capture la sortie de Ghostscript et de Tesseract puis la réémet par
+  son propre logger Python. Comme seul le logger `scribe` était configuré, ce
+  logger-là n'avait aucun destinataire : Python basculait sur son handler de
+  dernier recours, qui écrit sur `stderr` — que le service redirige vers
+  `service-err.log`, un fichier sans aucune limite de taille. Un journal de
+  67 Mo a été constaté ainsi, alors que ces avertissements n'apparaissaient
+  **jamais** dans `scribe.log`. Les handlers sont désormais posés sur le logger
+  racine : tout atterrit dans le journal plafonné et rotatif.
+- **Journaux du service sans aucune limite de taille.** L'installeur applique
+  désormais à `service-out.log` et `service-err.log` une rotation à 2 Mo, à
+  chaud — filet de sécurité pour ce qui échapperait encore à la journalisation
+  Python.
+- **La sortie console écrivait sur `stderr`.** `logging.StreamHandler()` sans
+  argument vise la sortie d'erreur, alors que la condition testait la sortie
+  standard. Sans effet sur le service (fenêtré), mais les lignes seraient
+  reparties dans `service-err.log` sur un exécutable à console. La cible est
+  maintenant explicite.
 - **Rotation de `scribe.log` défaillante en silence.** Elle procède par
   renommage, et sous Windows un renommage échoue si un autre programme tient le
   fichier ouvert (antivirus, visionneuse) ; `logging` avalait l'erreur et le
@@ -45,8 +58,11 @@ faire.
 - Commandes **`--diagnostic`** (réglages appliqués, état du registre et volume
   des journaux) et **`--purger-registre`**.
 - Commande **`--analyser-journal`** : dépouille les journaux, archives
-  comprises, et indique combien de fois chaque PDF a été traité. C'est ce qui
-  permet de constater une boucle de retraitement plutôt que de la supposer.
+  comprises, et indique combien de fois chaque PDF a été traité — ce qui permet
+  de constater une boucle de retraitement plutôt que de la supposer — ainsi que
+  les **lignes les plus répétées**, chiffres masqués pour regrouper les
+  variantes. Ce second relevé est la seule lecture utile de `service-err.log`,
+  qui ne contient aucun « Traitement : ».
 
 ### Modifié
 - **Contrôle préalable avant OCR** : si toutes les pages portent déjà du texte,

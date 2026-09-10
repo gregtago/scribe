@@ -10,6 +10,9 @@ Ils protègent les deux corrections qui comptent :
    doit solliciter ni Tesseract ni Ghostscript.
 3. **Pas de journal sans fin.** Un journal hors gabarit doit être mis de côté
    au démarrage — et conservé, jamais supprimé.
+4. **Rien ne fuit sur la sortie d'erreur.** Ce qu'écrivent OCRmyPDF, Ghostscript
+   et Tesseract doit atterrir dans ``scribe.log``, plafonné, et non dans le
+   fichier sans limite où le service redirige ``stderr``.
 
 Le moteur OCR est simulé : ces tests n'ont besoin ni de Tesseract ni de
 Ghostscript, et tournent en quelques secondes.
@@ -19,7 +22,10 @@ Lancement : python -m tests.test_ressources   (ou pytest tests/)
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import logging
 import os
 import shutil
 import sys
@@ -257,6 +263,58 @@ def test_l_analyse_ne_signale_rien_sur_un_journal_sain():
     assert r["pdf_repetes"] == 0
 
 
+def _journalisation_propre():
+    """Remet la journalisation à zéro : le logger racine est global."""
+    for cible in (logging.getLogger(), logging.getLogger("scribe")):
+        for handler in list(cible.handlers):
+            handler.close()
+        cible.handlers.clear()
+
+
+def test_les_messages_d_ocrmypdf_ne_fuient_pas_sur_la_sortie_d_erreur():
+    """Le cœur du correctif : 67 Mo de service-err.log venaient de là.
+
+    OCRmyPDF capture la sortie de Ghostscript et de Tesseract puis la réémet
+    sur son propre logger. Sans handler, Python bascule sur son handler de
+    dernier recours, qui écrit sur stderr — que le service redirige vers un
+    fichier sans aucune limite de taille.
+    """
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    log = dossier / "scribe.log"
+    erreurs = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(erreurs), contextlib.redirect_stdout(io.StringIO()):
+            setup_logging(log)
+            logging.getLogger("ocrmypdf").error("Ghostscript : zero-size page")
+            logging.getLogger("ocrmypdf._exec.ghostscript").warning("invalid xref")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+
+        contenu = log.read_text(encoding="utf-8")
+        assert "zero-size page" in contenu, "le message d'OCRmyPDF n'est pas dans scribe.log"
+        assert "invalid xref" in contenu
+        assert "zero-size page" not in erreurs.getvalue(), (
+            "le message a fui sur la sortie d'erreur : il gonflerait service-err.log"
+        )
+    finally:
+        _journalisation_propre()
+
+
+def test_l_analyse_repere_une_ligne_repetee_en_masse():
+    """Indispensable pour service-err.log : aucun « Traitement : » n'y figure."""
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    lignes = [f"   **** Error: Ignoring zero-size page, page {i}." for i in range(500)]
+    lignes += ["   **** Warning: invalid xref entry."] * 3
+    (dossier / "service-err.log").write_text("\n".join(lignes), encoding="utf-8")
+
+    r = journal.analyser(journal.journaux(dossier))
+
+    assert r["traitements"] == 0, "ce journal ne contient aucun traitement"
+    motif, nombre = r["motifs"][0]
+    assert nombre == 500, "les numéros de page doivent être regroupés en un seul motif"
+    assert "#" in motif, "les nombres doivent être masqués pour regrouper les répétitions"
+
+
 def test_setup_logging_n_ecrit_pas_deux_fois_dans_le_fichier():
     """Un message ne doit apparaître qu'une fois dans scribe.log."""
     dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
@@ -268,10 +326,7 @@ def test_setup_logging_n_ecrit_pas_deux_fois_dans_le_fichier():
 
     contenu = log.read_text(encoding="utf-8")
     assert contenu.count("message temoin unique") == 1, contenu
-    # Le logger « scribe » est global : on le laisse propre pour les autres tests.
-    for handler in list(logger.handlers):
-        handler.close()
-    logger.handlers.clear()
+    _journalisation_propre()
 
 
 def _main() -> int:

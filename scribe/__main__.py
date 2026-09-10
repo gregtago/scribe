@@ -90,6 +90,16 @@ def _analyser_journal(dossier: Path) -> int:
                 print(f"    {nombre:>5} fois  {chemin}")
     else:
         print("\n  Aucun PDF traité deux fois : pas de boucle de retraitement.")
+
+    # Lignes répétées : c'est la seule lecture utile de service-err.log, où
+    # Ghostscript et Tesseract recopient le même avertissement des milliers
+    # de fois sans qu'aucun « Traitement : » n'y figure.
+    motifs = [(m, n) for m, n in r["motifs"] if n > 1]
+    if motifs and r["lignes"]:
+        print("\n  Lignes les plus répétées (chiffres masqués par « # ») :")
+        for motif, nombre in motifs:
+            part = 100 * nombre / r["lignes"]
+            print(f"    {nombre:>7} fois ({part:4.1f} %)  {motif}")
     return 0
 
 

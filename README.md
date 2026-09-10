@@ -256,12 +256,16 @@ origine :
   antivirus ou une visionneuse qui tient le fichier ouvert la fait échouer en
   silence. Scribe met désormais un tel journal de côté à son démarrage : il est
   **renommé** en `scribe-AAAAMMJJ-HHMMSS.log.ancien`, jamais supprimé.
-- **`service-out.log` et `service-err.log`** ne viennent pas de Scribe : c'est
-  le gestionnaire de service (NSSM) qui y recopie tout ce que le processus
-  écrit, **y compris les messages de Tesseract et de Ghostscript**, très
-  bavards. Jusqu'à la version 1.1.0 ils n'avaient **aucune limite de taille** :
-  c'est la cause la plus probable d'un journal de plusieurs dizaines de Mo.
-  L'installeur leur applique maintenant une rotation à 2 Mo.
+- **`service-err.log`** est le plus gros piège, et la cause constatée d'un
+  journal de 67 Mo. OCRmyPDF **capture** la sortie de Ghostscript et de
+  Tesseract, puis la réémet par son propre logger Python. Ce logger n'ayant
+  aucun destinataire configuré, Python basculait sur son « handler de dernier
+  recours », qui écrit sur la sortie d'erreur — que le service redirige vers
+  `service-err.log`, sans aucune limite de taille. Les avertissements de
+  Ghostscript, très nombreux sur des scans, y étaient donc recopiés
+  indéfiniment **sans jamais apparaître dans `scribe.log`**, là où vous les
+  auriez vus. Ces messages atterrissent désormais dans `scribe.log`, plafonné,
+  et l'installeur applique en plus une rotation à 2 Mo aux fichiers du service.
 
 Pour savoir ce que contiennent ces méga-octets :
 
@@ -269,9 +273,21 @@ Pour savoir ce que contiennent ces méga-octets :
 scribe.exe --analyser-journal
 ```
 
-La commande dépouille tous les journaux, archives comprises, et indique combien
-de fois chaque PDF a été traité. Un même acte qui revient des dizaines de fois
-est la signature d'une boucle de retraitement.
+La commande dépouille tous les journaux, archives comprises, et indique deux
+choses :
+
+- **combien de fois chaque PDF a été traité** — un même acte qui revient des
+  dizaines de fois est la signature d'une boucle de retraitement ;
+- **les lignes les plus répétées**, chiffres masqués pour regrouper les
+  variantes. C'est la seule lecture utile de `service-err.log`, où l'on ne
+  trouve pas de « Traitement : » mais le même avertissement recopié des
+  centaines de milliers de fois :
+
+```
+  Lignes les plus répétées (chiffres masqués par « # ») :
+     412330 fois (49.6 %)  **** Error: Ignoring zero-size a page, page #.
+     412330 fois (49.6 %)  Estimating resolution as #
+```
 
 Les garde-fous correspondants sont couverts par des tests, exécutés à chaque
 compilation et lançables à la main — ils ne demandent ni Tesseract ni
