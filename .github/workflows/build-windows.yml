@@ -75,19 +75,48 @@ jobs:
       - name: Installer les moteurs OCR (Tesseract, Ghostscript, NSSM)
         timeout-minutes: 20
         run: |
-          # Tesseract et NSSM s'installent sans souci.
-          choco install tesseract nssm --no-progress -y
-          # Ghostscript : son installeur silencieux crashe parfois (access
-          # violation, code -1073741819) sur les runners -> on réessaie avec
-          # --force jusqu'à réussir.
-          $ok = $false
-          for ($i = 1; $i -le 5; $i++) {
-            choco install ghostscript --no-progress -y --force
-            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
-            Write-Host "Ghostscript : tentative $i échouée (code $LASTEXITCODE), nouvel essai dans 15 s…"
-            Start-Sleep -Seconds 15
+          # Deux aléas connus sur les runners, qui échouaient tous deux mal :
+          #
+          #   - le dépôt communautaire Chocolatey renvoie régulièrement 503
+          #     (Service Unavailable) ; « choco install » peut alors sortir en
+          #     code 0 après n'avoir RIEN installé ;
+          #   - l'installeur silencieux de Ghostscript crashe parfois (access
+          #     violation, code -1073741819).
+          #
+          # Seul Ghostscript était protégé par une reprise. Un échec sur
+          # Tesseract passait inaperçu — l'étape était réputée réussie — et ne
+          # se manifestait que bien plus loin, dans fetch-vendor.ps1, sous la
+          # forme trompeuse « Tesseract introuvable ». On vérifie donc la
+          # présence RÉELLE de chaque moteur après chaque tentative, aux mêmes
+          # emplacements que ceux attendus par fetch-vendor.ps1.
+          function Install-Moteur {
+            param([string]$Nom, [scriptblock]$Present, [switch]$Forcer)
+            for ($i = 1; $i -le 5; $i++) {
+              if ($Forcer) { choco install $Nom --no-progress -y --force }
+              else         { choco install $Nom --no-progress -y }
+              if ($LASTEXITCODE -eq 0 -and (& $Present)) {
+                Write-Host "$Nom : présent (tentative $i)."
+                return
+              }
+              Write-Host "$Nom : tentative $i infructueuse (code $LASTEXITCODE), nouvel essai dans 20 s…"
+              Start-Sleep -Seconds 20
+            }
+            throw "$Nom n'a pas pu être installé après 5 tentatives (dépôt Chocolatey indisponible ?)."
           }
-          if (-not $ok) { throw "Ghostscript n'a pas pu être installé après 5 tentatives." }
+
+          Install-Moteur -Nom tesseract -Present {
+            Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe"
+          }
+          Install-Moteur -Nom nssm -Present {
+            [bool](Get-ChildItem "C:\ProgramData\chocolatey\lib" -Recurse -Filter nssm.exe `
+                     -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Length -ge 100000 } | Select-Object -First 1)
+          }
+          Install-Moteur -Nom ghostscript -Forcer -Present {
+            [bool](Get-ChildItem "C:\Program Files\gs" -Directory `
+                     -ErrorAction SilentlyContinue | Select-Object -First 1)
+          }
+
           # Rafraîchit le PATH pour la même session PowerShell.
           Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
           Update-SessionEnvironment
