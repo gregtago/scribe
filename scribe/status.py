@@ -4,9 +4,15 @@ Le service (worker) met à jour des compteurs et les écrit dans un fichier
 JSON (``status.json``) placé dans le dossier de données. L'application de la
 barre des tâches lit ce fichier périodiquement pour afficher la progression.
 
-L'écriture est faite par un thread dédié, au plus une fois par seconde quand
-quelque chose a changé, pour ne pas marteler le disque lors de la mise en
-file initiale de centaines de fichiers.
+L'écriture est faite par un thread dédié, uniquement quand quelque chose a
+changé, pour ne pas marteler le disque lors de la mise en file initiale de
+centaines de fichiers.
+
+Les compteurs distinguent ce qui a réellement été océrisé de ce qui a
+simplement été examiné puis écarté (déjà recherchable, disparu…). Sans cette
+distinction, un fichier seulement contrôlé faisait monter le compteur au même
+titre qu'un fichier traité, et l'on avait l'impression que le travail
+augmentait alors qu'il n'y avait rien de nouveau.
 """
 
 from __future__ import annotations
@@ -17,15 +23,23 @@ import time
 from collections import deque
 from pathlib import Path
 
+# Issues considérées comme un traitement effectif.
+_STATUS_OCR = "ok"
+# Issues considérées comme un échec.
+_STATUS_ERROR = "erreur"
+
 
 class StatusReporter:
     """Compteurs d'avancement, sérialisés dans status.json."""
 
-    def __init__(self, path: str | Path, flush_interval: float = 1.0) -> None:
+    def __init__(self, path: str | Path, flush_interval: float = 2.0) -> None:
         self._path = Path(path)
         self._flush_interval = flush_interval
         self._lock = threading.Lock()
-        self._done = 0            # PDF traités depuis le démarrage
+        self._done = 0            # PDF sortis de la file, quelle que soit l'issue
+        self._ocr = 0             # PDF réellement océrisés
+        self._skipped = 0         # PDF examinés puis écartés (rien à faire)
+        self._errors = 0          # PDF en erreur
         self._pending = 0         # PDF en file, pas encore commencés
         self._current: str | None = None   # PDF en cours de traitement
         self._recent: deque[dict] = deque(maxlen=15)
@@ -33,7 +47,9 @@ class StatusReporter:
         self._paused = False
         self._dirty = True
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._flush_loop, daemon=True)
+        self._thread = threading.Thread(
+            target=self._flush_loop, name="scribe-status", daemon=True
+        )
         self._thread.start()
 
     # -- mutations appelées par le worker --------------------------------
@@ -57,6 +73,12 @@ class StatusReporter:
     def on_done(self, pdf: Path, status: str) -> None:
         with self._lock:
             self._done += 1
+            if status == _STATUS_OCR:
+                self._ocr += 1
+            elif status == _STATUS_ERROR:
+                self._errors += 1
+            else:
+                self._skipped += 1
             self._current = None
             self._recent.appendleft(
                 {"file": pdf.name, "path": str(pdf), "status": status,
@@ -72,6 +94,9 @@ class StatusReporter:
             return {
                 "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "done": self._done,
+                "ocr": self._ocr,
+                "skipped": self._skipped,
+                "errors": self._errors,
                 "pending": self._pending,
                 "current": current,
                 "current_name": Path(current).name if current else None,
@@ -85,8 +110,10 @@ class StatusReporter:
         data = self._snapshot()
         tmp = self._path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                           encoding="utf-8")
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
             tmp.replace(self._path)
         except OSError:
             pass

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 from pathlib import Path
 
-from . import paths
+from . import paths, resources
 from .config import load_config
 from .logging_setup import setup_logging
 from .state import ProcessedStore
@@ -25,7 +26,11 @@ deskew = true
 rotate_pages = true
 use_polling = true
 stable_seconds = 5
-rescan_seconds = 300
+rescan_seconds = 1800
+poll_interval = 15
+skip_if_text = true
+jobs = 0
+priority = "basse"
 log_file = "scribe.log"
 """
 
@@ -49,6 +54,52 @@ def write_default_config(watch_dir: str) -> Path:
     return cfg_path
 
 
+def _diagnostic(config, state_path: Path, purge: bool = False) -> int:
+    """Affiche l'état du registre et les réglages de ressources effectifs.
+
+    Sert à répondre à la question « pourquoi Scribe travaille-t-il autant ? »
+    sans avoir à ouvrir le journal : taille du registre, nombre d'entrées,
+    entrées devenues obsolètes, et réglages réellement appliqués.
+    """
+    store = ProcessedStore(state_path)
+    stats = store.stats()
+
+    def ligne(intitule: str, valeur) -> None:
+        print(f"  {intitule:<22}: {valeur}")
+
+    if config.use_polling:
+        scrutation = f"toutes les {config.poll_interval:.0f} s"
+    else:
+        scrutation = "événements natifs"
+
+    print("Scribe — diagnostic")
+    print("-" * 52)
+    ligne("dossier surveillé", config.watch_dir)
+    print("Registre des fichiers traités")
+    ligne("emplacement", stats["path"])
+    ligne("taille", f"{stats['size_bytes'] / 1024:.1f} Kio")
+    ligne("fichiers mémorisés", stats["entries"])
+    ligne("entrées obsolètes", f"{stats['missing']} (fichier disparu)")
+    ligne("sans empreinte", f"{stats['without_hash']} (format antérieur)")
+    print("Ressources")
+    ligne("cœurs pour l'OCR", f"{config.effective_jobs} sur {os.cpu_count()}")
+    ligne("priorité du processus", config.priority)
+    ligne("scrutation du dossier", scrutation)
+    ligne("analyse complète", f"toutes les {config.rescan_seconds:.0f} s")
+    ligne("compression (optimize)", config.optimize)
+    ligne("redressement (deskew)", config.deskew)
+    ligne("rotation des pages", config.rotate_pages)
+    ligne("saut si texte présent", config.skip_if_text)
+
+    if purge:
+        print(f"\nPurge : {store.prune()} entrée(s) retirée(s) du registre.")
+    elif stats["missing"]:
+        print("\nAstuce : --purger-registre retire les entrées obsolètes.")
+
+    store.stop()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="scribe",
@@ -69,6 +120,16 @@ def main(argv: list[str] | None = None) -> int:
         "--init-config",
         metavar="DOSSIER",
         help="Écrit un config.toml par défaut pour ce dossier surveillé, puis quitte.",
+    )
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="Affiche l'état du registre et les réglages de ressources, puis quitte.",
+    )
+    parser.add_argument(
+        "--purger-registre",
+        action="store_true",
+        help="Retire du registre les entrées dont le fichier n'existe plus, puis quitte.",
     )
     args = parser.parse_args(argv)
 
@@ -91,10 +152,20 @@ def main(argv: list[str] | None = None) -> int:
     log_path = Path(config.log_file)
     if not log_path.is_absolute():
         log_path = paths.data_dir() / log_path
+    state_path = log_path.with_name(".ocr_state.json")
+
+    if args.diagnostic or args.purger_registre:
+        return _diagnostic(config, state_path, purge=args.purger_registre)
+
     logger = setup_logging(log_path)
     logger.info("Démarrage de Scribe.")
 
-    state = ProcessedStore(log_path.with_name(".ocr_state.json"))
+    # Scribe travaille en tâche de fond : il s'efface devant les logiciels que
+    # l'on utilise réellement. Les processus enfants (Tesseract, Ghostscript)
+    # héritent de cette priorité.
+    resources.lower_priority(config.priority)
+
+    state = ProcessedStore(state_path)
     reporter = StatusReporter(paths.data_dir() / "status.json")
     service = OcrService(config, state, reporter, control_dir=paths.data_dir())
 
@@ -102,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Signal %s reçu, arrêt en cours...", signum)
         service.stop()
         reporter.stop()
+        state.stop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -112,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         service.run_once()
         reporter.stop()
+        state.stop()
         logger.info("Mode --once terminé.")
         return 0
 
@@ -121,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         service.stop()
     finally:
         reporter.stop()
+        state.stop()
     return 0
 
 

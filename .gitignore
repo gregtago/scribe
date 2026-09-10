@@ -1,6 +1,8 @@
 # Configuration locale et état d'exécution
 config.toml
 .ocr_state.json
+status.json
+paused.flag
 *.log
 *.log.*
 

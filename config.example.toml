@@ -22,23 +22,55 @@ keep_backup = false
 backup_dir = "_originaux"
 
 # --- Qualité / traitement ------------------------------------------------
+# Attention : les trois options ci-dessous coûtent cher en processeur.
+# Les passer à false / 0 accélère très sensiblement le traitement.
 # Niveau d'optimisation / compression (0 = aucune, 1 = sûr, 2-3 = plus fort).
 optimize = 1
 # Corrige l'inclinaison des pages scannées de travers.
+# Coûteux : chaque page doit être redessinée.
 deskew = true
 # Fait pivoter automatiquement les pages dans le bon sens.
+# Coûteux : ajoute une analyse Tesseract supplémentaire par page.
 rotate_pages = true
+
+# Avant tout traitement, Scribe regarde si le PDF porte déjà du texte sur
+# toutes ses pages ; si oui il ne lance ni OCR ni réécriture du fichier.
+# C'est le réglage qui évite le plus de travail inutile. Passez-le à false si
+# vous constatez qu'un scan est écarté à tort (il est alors signalé dans le
+# journal par « Déjà recherchable, aucun traitement »).
+skip_if_text = true
+
+# --- Ménagement des ressources ------------------------------------------
+# Nombre de cœurs du processeur que l'OCR a le droit d'utiliser.
+# 0 = automatique (la moitié des cœurs de la machine, au minimum 1).
+# Sans cette limite, l'OCR prend TOUS les cœurs et le poste se fige pendant
+# le traitement d'un gros PDF.
+jobs = 0
+# Priorité du processus. Scribe travaille en tâche de fond : il doit s'effacer
+# devant les logiciels que vous utilisez réellement.
+#   "basse"    -> recommandé : le poste reste fluide.
+#   "inactive" -> le plus discret possible (Scribe ne travaille que lorsque la
+#                 machine est libre). L'OCR peut alors être nettement plus long.
+#   "normale"  -> aucun ménagement (déconseillé sur un poste de travail).
+priority = "basse"
 
 # --- Surveillance --------------------------------------------------------
 # Scrutation périodique (polling) : plus fiable sur les lecteurs réseau
 # partagés que la détection d'événements native. Recommandé à true en étude.
 use_polling = true
+# Intervalle de scrutation, en secondes. ATTENTION : chaque tour relit TOUTE
+# l'arborescence surveillée. Sur un dossier synchronisé (OneDrive) contenant
+# des milliers de fichiers, une valeur trop faible fait travailler le disque
+# en permanence. 15 s est un bon compromis ; montez à 30 ou 60 s si le dossier
+# est très volumineux.
+poll_interval = 15
 # Nombre de secondes pendant lesquelles la taille d'un fichier doit rester
 # stable avant de le traiter (garantit que la copie/scan est terminée).
 stable_seconds = 5
 # Nouvelle analyse complète du dossier toutes les N secondes (filet de
 # sécurité au cas où un événement serait manqué). 0 pour désactiver.
-rescan_seconds = 300
+# Cette analyse s'ajoute à la scrutation ci-dessus : inutile de la rapprocher.
+rescan_seconds = 1800
 
 # --- Journalisation ------------------------------------------------------
 log_file = "scribe.log"

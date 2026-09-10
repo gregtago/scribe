@@ -3,5 +3,8 @@
 
 ocrmypdf>=16.0.0   # moteur OCR : ajoute une couche texte au PDF (via Tesseract + Ghostscript)
 watchdog>=4.0.0    # surveillance des dossiers en temps réel
+# pikepdf est déjà une dépendance d'OCRmyPDF ; il est cité explicitement
+# car Scribe l'importe directement (détection d'une couche texte existante).
+pikepdf>=8.0.0     # lecture rapide des PDF, sans lancer l'OCR
 pystray>=0.19.0    # icône dans la barre des tâches (app compagnon)
 Pillow>=10.0.0     # image de l'icône (déjà requis par OCRmyPDF)

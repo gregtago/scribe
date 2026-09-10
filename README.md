@@ -205,13 +205,53 @@ powershell -ExecutionPolicy Bypass -File install\uninstall-task.ps1
 | `languages`      | Langues Tesseract, ex. `["fra"]` ou `["fra","eng"]`.            |
 | `keep_backup`    | `false` (défaut) = remplacement pur. `true` = garder une copie. |
 | `backup_dir`     | Si `keep_backup=true` : sous-dossier ; vide → `<nom>.orig.pdf`. |
-| `optimize`       | Compression `0`–`3` (`1` = sûr).                                |
-| `deskew`         | Redresse les pages scannées de travers.                        |
-| `rotate_pages`   | Remet les pages dans le bon sens.                              |
+| `optimize`       | Compression `0`–`3` (`1` = sûr). Coûteux en processeur.        |
+| `deskew`         | Redresse les pages scannées de travers. Coûteux.               |
+| `rotate_pages`   | Remet les pages dans le bon sens. Coûteux (passe en plus).     |
+| `skip_if_text`   | `true` = ne pas retraiter un PDF portant déjà du texte.         |
+| `jobs`           | Cœurs accordés à l'OCR. `0` = moitié des cœurs (défaut).       |
+| `priority`       | `basse` (défaut), `inactive` ou `normale`.                     |
 | `use_polling`    | `true` = scrutation régulière, plus fiable sur lecteur réseau. |
+| `poll_interval`  | Intervalle de scrutation, en secondes (défaut `15`).           |
 | `stable_seconds` | Délai de stabilité avant traitement (copie terminée).          |
 | `rescan_seconds` | Ré-analyse complète périodique (`0` pour désactiver).          |
 | `log_file`       | Fichier journal.                                               |
+
+### Si Scribe consomme trop de ressources
+
+Scribe est conçu pour s'effacer derrière votre travail, mais l'arbitrage entre
+rapidité de l'OCR et confort du poste vous appartient. Trois leviers, du plus
+efficace au plus fin :
+
+1. **`jobs` et `priority`** — le poste se fige pendant l'OCR d'un gros PDF ?
+   `jobs = 1` et `priority = "inactive"` rendent Scribe quasi invisible ;
+   l'OCR est plus long, mais il travaille en tâche de fond.
+2. **`poll_interval` et `rescan_seconds`** — le disque travaille en
+   permanence, ou OneDrive se synchronise sans arrêt, alors qu'il n'y a aucun
+   nouveau PDF ? Chaque tour de scrutation relit **toute** l'arborescence
+   surveillée. Sur un dossier volumineux, passez `poll_interval` à `30` ou
+   `60`, et `rescan_seconds` à `3600`.
+3. **`deskew`, `rotate_pages` et `optimize`** — ces trois options font l'essentiel
+   du travail processeur. Les passer à `false` / `0` accélère très nettement le
+   traitement, au prix de pages parfois de travers et de fichiers un peu plus lourds.
+
+Pour savoir où vous en êtes, la commande de diagnostic affiche les réglages
+réellement appliqués et l'état du registre des fichiers traités :
+
+```
+scribe.exe --diagnostic
+```
+
+(en Python : `python -m scribe --diagnostic`). Si elle signale des entrées
+obsolètes, `--purger-registre` les retire.
+
+Les garde-fous correspondants sont couverts par des tests, exécutés à chaque
+compilation et lançables à la main — ils ne demandent ni Tesseract ni
+Ghostscript :
+
+```
+python tests/test_ressources.py
+```
 
 ---
 
@@ -223,6 +263,12 @@ powershell -ExecutionPolicy Bypass -File install\uninstall-task.ps1
 - **Rien ne se passe sur un lecteur réseau** → laissez `use_polling = true`.
 - **PDF ignoré** → il est peut-être déjà textuel (rien à faire) ou protégé par
   mot de passe (indiqué dans le journal).
+- **Le nombre de fichiers à traiter augmente alors que rien de nouveau
+  n'arrive** → c'était le symptôme d'une boucle de retraitement, corrigée :
+  la synchronisation OneDrive retouchait la date des fichiers, que Scribe
+  prenait pour une modification. Le registre compare désormais aussi
+  l'empreinte du contenu. Lancez `--diagnostic` pour vérifier.
+- **Le poste rame** → voir « Si Scribe consomme trop de ressources » au §6.
 - Consultez `scribe.log` : chaque fichier traité, ignoré ou en erreur y
   est tracé.
 
@@ -239,9 +285,12 @@ scribe/
 │   ├── watcher.py        # surveillance + file d'attente (prioritaire)
 │   ├── processor.py      # OCR d'un PDF (OCRmyPDF)
 │   ├── state.py          # suivi des fichiers déjà traités
+│   ├── resources.py      # bridage CPU : priorité du processus, parallélisme
 │   ├── status.py         # publication de l'avancement (status.json)
 │   ├── tray.py           # app barre des tâches : icône + progression
 │   └── logging_setup.py  # journalisation
+├── tests/                # tests de non-régression (moteur OCR simulé)
+│   └── test_ressources.py
 ├── build/                # fabrication de l'installeur
 │   ├── entrypoint.py     # point d'entrée PyInstaller (service)
 │   ├── tray-entrypoint.py# point d'entrée PyInstaller (barre des tâches)
