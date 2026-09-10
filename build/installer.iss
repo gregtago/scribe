@@ -78,6 +78,16 @@ Filename: "{app}\nssm.exe"; Parameters: "set {#ServiceName} AppStdout ""{commona
     Flags: runhidden waituntilterminated
 Filename: "{app}\nssm.exe"; Parameters: "set {#ServiceName} AppStderr ""{commonappdata}\Scribe\service-err.log"""; \
     Flags: runhidden waituntilterminated
+; Rotation des fichiers de sortie du service. SANS ces trois réglages, NSSM
+; écrit dans service-out.log / service-err.log SANS AUCUNE LIMITE : ces
+; fichiers atteignaient plusieurs dizaines de méga-octets. On les fait tourner
+; à 2 Mo, à chaud (AppRotateOnline), sans avoir à arrêter le service.
+Filename: "{app}\nssm.exe"; Parameters: "set {#ServiceName} AppRotateFiles 1"; \
+    Flags: runhidden waituntilterminated
+Filename: "{app}\nssm.exe"; Parameters: "set {#ServiceName} AppRotateOnline 1"; \
+    Flags: runhidden waituntilterminated
+Filename: "{app}\nssm.exe"; Parameters: "set {#ServiceName} AppRotateBytes 2000000"; \
+    Flags: runhidden waituntilterminated
 ; 3. Démarre le service immédiatement.
 Filename: "{app}\nssm.exe"; Parameters: "start {#ServiceName}"; \
     Flags: runhidden waituntilterminated

@@ -245,6 +245,34 @@ scribe.exe --diagnostic
 (en Python : `python -m scribe --diagnostic`). Si elle signale des entrées
 obsolètes, `--purger-registre` les retire.
 
+### Si le journal est devenu énorme
+
+`C:\ProgramData\Scribe\` contient plusieurs journaux, et ils n'ont pas la même
+origine :
+
+- **`scribe.log`** est écrit par Scribe et **tourne** : 2 Mo par fichier,
+  5 archives, soit 12 Mo au maximum. S'il dépasse largement ce gabarit, c'est
+  que la rotation a échoué — sous Windows, elle procède par renommage, et un
+  antivirus ou une visionneuse qui tient le fichier ouvert la fait échouer en
+  silence. Scribe met désormais un tel journal de côté à son démarrage : il est
+  **renommé** en `scribe-AAAAMMJJ-HHMMSS.log.ancien`, jamais supprimé.
+- **`service-out.log` et `service-err.log`** ne viennent pas de Scribe : c'est
+  le gestionnaire de service (NSSM) qui y recopie tout ce que le processus
+  écrit, **y compris les messages de Tesseract et de Ghostscript**, très
+  bavards. Jusqu'à la version 1.1.0 ils n'avaient **aucune limite de taille** :
+  c'est la cause la plus probable d'un journal de plusieurs dizaines de Mo.
+  L'installeur leur applique maintenant une rotation à 2 Mo.
+
+Pour savoir ce que contiennent ces méga-octets :
+
+```
+scribe.exe --analyser-journal
+```
+
+La commande dépouille tous les journaux, archives comprises, et indique combien
+de fois chaque PDF a été traité. Un même acte qui revient des dizaines de fois
+est la signature d'une boucle de retraitement.
+
 Les garde-fous correspondants sont couverts par des tests, exécutés à chaque
 compilation et lançables à la main — ils ne demandent ni Tesseract ni
 Ghostscript :
@@ -286,6 +314,7 @@ scribe/
 │   ├── processor.py      # OCR d'un PDF (OCRmyPDF)
 │   ├── state.py          # suivi des fichiers déjà traités
 │   ├── resources.py      # bridage CPU : priorité du processus, parallélisme
+│   ├── journal.py        # dépouillement des journaux (--analyser-journal)
 │   ├── status.py         # publication de l'avancement (status.json)
 │   ├── tray.py           # app barre des tâches : icône + progression
 │   └── logging_setup.py  # journalisation

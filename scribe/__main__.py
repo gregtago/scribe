@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from . import paths, resources
+from . import journal, paths, resources
 from .config import load_config
 from .logging_setup import setup_logging
 from .state import ProcessedStore
@@ -54,6 +54,45 @@ def write_default_config(watch_dir: str) -> Path:
     return cfg_path
 
 
+def _analyser_journal(dossier: Path) -> int:
+    """Dépouille les journaux : combien de fois chaque PDF a-t-il été traité ?
+
+    Un journal volumineux s'explique. Un même PDF qui revient des dizaines de
+    fois signale une boucle de retraitement — chaque passage consommant
+    processeur, disque et synchronisation pour rien.
+    """
+    fichiers = journal.journaux(dossier)
+    if not fichiers:
+        print(f"Aucun journal trouvé dans {dossier}.")
+        return 0
+
+    r = journal.analyser(fichiers)
+    print("Scribe — analyse des journaux")
+    print("-" * 52)
+    print(f"  {'fichiers dépouillés':<24}: {r['fichiers_journaux']}")
+    print(f"  {'volume':<24}: {r['octets'] / 1_048_576:.1f} Mio "
+          f"({r['lignes']} lignes)")
+    if r["premiere"]:
+        print(f"  {'période':<24}: du {r['premiere']} au {r['derniere']}")
+    print(f"  {'traitements lancés':<24}: {r['traitements']}")
+    print(f"  {'PDF distincts concernés':<24}: {r['pdf_distincts']}")
+    print(f"  {'écartés sans OCR':<24}: {r['ignores']}")
+
+    en_trop = r["traitements_en_trop"]
+    if en_trop > 0:
+        part = 100 * en_trop / r["traitements"] if r["traitements"] else 0
+        print()
+        print(f"  {r['pdf_repetes']} PDF ont été traités plusieurs fois, soit "
+              f"{en_trop} traitements en trop ({part:.0f} % du total).")
+        print("  Les plus repris :")
+        for chemin, nombre in r["palmares"]:
+            if nombre > 1:
+                print(f"    {nombre:>5} fois  {chemin}")
+    else:
+        print("\n  Aucun PDF traité deux fois : pas de boucle de retraitement.")
+    return 0
+
+
 def _diagnostic(config, state_path: Path, purge: bool = False) -> int:
     """Affiche l'état du registre et les réglages de ressources effectifs.
 
@@ -81,6 +120,13 @@ def _diagnostic(config, state_path: Path, purge: bool = False) -> int:
     ligne("fichiers mémorisés", stats["entries"])
     ligne("entrées obsolètes", f"{stats['missing']} (fichier disparu)")
     ligne("sans empreinte", f"{stats['without_hash']} (format antérieur)")
+    fichiers = journal.journaux(state_path.parent)
+    total = sum(f.stat().st_size for f in fichiers if f.exists())
+    print("Journaux")
+    ligne("fichiers", len(fichiers))
+    ligne("volume total", f"{total / 1_048_576:.1f} Mio")
+    for f in sorted(fichiers, key=lambda p: -p.stat().st_size)[:3]:
+        ligne(f"  {f.name}"[:22], f"{f.stat().st_size / 1_048_576:.1f} Mio")
     print("Ressources")
     ligne("cœurs pour l'OCR", f"{config.effective_jobs} sur {os.cpu_count()}")
     ligne("priorité du processus", config.priority)
@@ -131,6 +177,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Retire du registre les entrées dont le fichier n'existe plus, puis quitte.",
     )
+    parser.add_argument(
+        "--analyser-journal",
+        action="store_true",
+        help="Dépouille les journaux : combien de fois chaque PDF a été traité.",
+    )
     args = parser.parse_args(argv)
 
     # Rendre les moteurs OCR embarqués (vendor/) visibles avant tout appel OCR.
@@ -153,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
     if not log_path.is_absolute():
         log_path = paths.data_dir() / log_path
     state_path = log_path.with_name(".ocr_state.json")
+
+    if args.analyser_journal:
+        return _analyser_journal(log_path.parent)
 
     if args.diagnostic or args.purger_registre:
         return _diagnostic(config, state_path, purge=args.purger_registre)
