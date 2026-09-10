@@ -8,6 +8,8 @@ Ils protègent les deux corrections qui comptent :
    nombre de fichiers à traiter alors qu'aucun document n'arrivait.
 2. **Pas d'OCR inutile.** Un PDF portant déjà du texte sur toutes ses pages ne
    doit solliciter ni Tesseract ni Ghostscript.
+3. **Pas de journal sans fin.** Un journal hors gabarit doit être mis de côté
+   au démarrage — et conservé, jamais supprimé.
 
 Le moteur OCR est simulé : ces tests n'ont besoin ni de Tesseract ni de
 Ghostscript, et tournent en quelques secondes.
@@ -61,7 +63,9 @@ _fake.ExitCode = _ExitCode
 _fake.exceptions = _Exceptions
 sys.modules.setdefault("ocrmypdf", _fake)
 
+from scribe import journal                # noqa: E402
 from scribe.config import Config          # noqa: E402
+from scribe.logging_setup import archive_if_oversize, setup_logging  # noqa: E402
 from scribe.state import ProcessedStore   # noqa: E402
 from scribe.status import StatusReporter  # noqa: E402
 from scribe.watcher import OcrService     # noqa: E402
@@ -190,6 +194,84 @@ def test_le_registre_purge_ses_entrees_obsoletes():
     assert bench.store.prune() == 1
     assert bench.store.stats()["entries"] == 1
     bench.store.stop()
+
+
+# --- journalisation --------------------------------------------------------
+def test_un_journal_hors_gabarit_est_mis_de_cote_et_conserve():
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    log = dossier / "scribe.log"
+    log.write_bytes(b"ligne de journal\n" * 500_000)   # ~8 Mo
+    taille = log.stat().st_size
+
+    archive = archive_if_oversize(log)
+
+    assert archive is not None, "le journal hors gabarit n'a pas été mis de côté"
+    assert archive.exists(), "l'ancien journal a disparu : il ne doit jamais être supprimé"
+    assert archive.stat().st_size == taille
+    assert not log.exists(), "le journal aurait dû être renommé"
+
+
+def test_un_journal_de_taille_normale_est_laisse_tel_quel():
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    log = dossier / "scribe.log"
+    log.write_bytes(b"court\n")
+
+    assert archive_if_oversize(log) is None
+    assert log.exists()
+
+
+def test_l_analyse_du_journal_reconnait_une_boucle():
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    lignes = []
+    for _ in range(30):   # un PDF repris 30 fois : une boucle
+        lignes.append("2026-08-15 09:12:33  INFO     "
+                      "Traitement : C:/Actes/boucle.pdf (jusqu'à 8 cœur(s))")
+    for i in range(5):    # cinq PDF traités une seule fois
+        lignes.append(f"2026-08-15 10:00:0{i}  INFO     Traitement : C:/Actes/{i}.pdf")
+    (dossier / "scribe.log").write_text("\n".join(lignes), encoding="utf-8")
+    # une archive de rotation doit être dépouillée elle aussi
+    (dossier / "scribe.log.1").write_text(
+        "2026-07-01 08:00:00  INFO     Traitement : C:/Actes/boucle.pdf\n",
+        encoding="utf-8")
+
+    fichiers = journal.journaux(dossier)
+    assert len(fichiers) == 2, "les archives de rotation doivent être incluses"
+
+    r = journal.analyser(fichiers)
+    assert r["traitements"] == 36
+    assert r["pdf_distincts"] == 6
+    assert r["pdf_repetes"] == 1
+    assert r["traitements_en_trop"] == 30
+    assert r["palmares"][0] == ("C:/Actes/boucle.pdf", 31)
+
+
+def test_l_analyse_ne_signale_rien_sur_un_journal_sain():
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    (dossier / "scribe.log").write_text(
+        "\n".join(f"2026-08-15 10:00:0{i}  INFO     Traitement : C:/Actes/{i}.pdf"
+                  for i in range(5)),
+        encoding="utf-8")
+
+    r = journal.analyser(journal.journaux(dossier))
+    assert r["traitements_en_trop"] == 0
+    assert r["pdf_repetes"] == 0
+
+
+def test_setup_logging_n_ecrit_pas_deux_fois_dans_le_fichier():
+    """Un message ne doit apparaître qu'une fois dans scribe.log."""
+    dossier = Path(tempfile.mkdtemp(prefix="scribe-log-"))
+    log = dossier / "scribe.log"
+    logger = setup_logging(log)
+    logger.info("message temoin unique")
+    for handler in logger.handlers:
+        handler.flush()
+
+    contenu = log.read_text(encoding="utf-8")
+    assert contenu.count("message temoin unique") == 1, contenu
+    # Le logger « scribe » est global : on le laisse propre pour les autres tests.
+    for handler in list(logger.handlers):
+        handler.close()
+    logger.handlers.clear()
 
 
 def _main() -> int:

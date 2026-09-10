@@ -23,6 +23,16 @@ faire.
   erreur sont maintenant distingués.
 - **Ré-analyse d'un PDF que Scribe vient lui-même de réécrire** : l'écriture
   du résultat déclenchait un nouveau tour de file pour rien.
+- **Journaux du service sans aucune limite de taille.** `service-out.log` et
+  `service-err.log`, où le gestionnaire de service (NSSM) recopie tout ce
+  qu'écrit le processus — messages de Tesseract et de Ghostscript compris —
+  grossissaient sans plafond ; des journaux de plusieurs dizaines de Mo ont été
+  observés. L'installeur leur applique désormais une rotation à 2 Mo, à chaud.
+- **Rotation de `scribe.log` défaillante en silence.** Elle procède par
+  renommage, et sous Windows un renommage échoue si un autre programme tient le
+  fichier ouvert (antivirus, visionneuse) ; `logging` avalait l'erreur et le
+  journal grossissait sans fin. Au démarrage, un journal hors gabarit est
+  maintenant mis de côté — **renommé, jamais supprimé**.
 
 ### Ajouté
 - Réglage **`jobs`** : nombre de cœurs accordés à l'OCR. Par défaut la moitié
@@ -32,8 +42,11 @@ faire.
   la priorité processeur et les entrées/sorties du service. Tesseract et
   Ghostscript en héritent.
 - Réglage **`poll_interval`** : intervalle de scrutation du dossier.
-- Commandes **`--diagnostic`** (réglages appliqués et état du registre) et
-  **`--purger-registre`**.
+- Commandes **`--diagnostic`** (réglages appliqués, état du registre et volume
+  des journaux) et **`--purger-registre`**.
+- Commande **`--analyser-journal`** : dépouille les journaux, archives
+  comprises, et indique combien de fois chaque PDF a été traité. C'est ce qui
+  permet de constater une boucle de retraitement plutôt que de la supposer.
 
 ### Modifié
 - **Contrôle préalable avant OCR** : si toutes les pages portent déjà du texte,
